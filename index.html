@@ -9,28 +9,63 @@
 <body>
   <canvas id="confetti-canvas"></canvas>
 
+  <!-- 進入網站暱稱設定視窗 -->
+  <div id="nickname-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-emoji">🎈🐱🐶🎈</div>
+      <h2>歡迎來到歡樂井字大作戰！</h2>
+      <p>請先輸入你的暱稱，讓對手認識你喔：</p>
+      <div class="nickname-input-row">
+        <input type="text" id="nickname-input" maxlength="10" placeholder="例如：快樂小貓" autocomplete="off">
+        <button id="random-name-btn" type="button" class="pill-btn random-btn" title="隨機產生可愛名字">🎲 隨機取名</button>
+      </div>
+      <button id="start-game-btn" class="action-btn full-width">🚀 進入遊戲大廳</button>
+    </div>
+  </div>
+
+  <!-- 對手離開／比賽結束通知視窗 -->
+  <div id="opponent-left-modal" class="modal-overlay hidden">
+    <div class="modal-card alert-card">
+      <div class="modal-emoji">📢😢</div>
+      <h2>比賽結束通知</h2>
+      <p id="opponent-left-msg">對手已經離開房間，本場比賽結束囉！</p>
+      <button id="back-to-lobby-btn" class="action-btn full-width">🏠 返回對戰大廳</button>
+    </div>
+  </div>
+
   <main class="game-container">
     <header>
+      <div class="top-user-bar">
+        <span id="my-profile-badge" class="profile-pill" title="點擊修改暱稱">👤 玩家：尚未設定 ✏️</span>
+      </div>
       <h1>✨ 歡樂井字大作戰 ✨</h1>
 
       <!-- 模式與設定列 -->
       <div class="controls-bar">
+        <button id="online-toggle-btn" class="pill-btn mode-online active-mode">🌐 線上雙人對戰</button>
         <button id="mode-btn" class="pill-btn mode-ai">🤖 挑戰小電腦</button>
-        <button id="online-toggle-btn" class="pill-btn mode-online">🌐 線上雙人對戰</button>
         <button id="theme-btn" class="pill-btn theme-btn">🎨 貓狗大戰</button>
         <button id="sound-btn" class="pill-btn sound-btn" aria-label="音效開關">🔊</button>
       </div>
 
-      <!-- 線上對戰大廳面板 -->
-      <section id="online-panel" class="online-panel hidden">
+      <!-- 線上對戰大廳與房間列表 -->
+      <section id="online-panel" class="online-panel">
         <div id="lobby-controls" class="lobby-controls">
-          <button id="create-room-btn" class="room-btn create">🏠 建立房間</button>
-          <div class="join-group">
-            <input type="text" id="room-input" maxlength="4" inputmode="numeric" placeholder="輸入4碼房號">
-            <button id="join-room-btn" class="room-btn join">加入</button>
+          <div class="lobby-header">
+            <span class="lobby-title">🏠 線上對戰大廳</span>
+            <button id="create-room-btn" class="room-btn create">➕ 建立新房間</button>
+          </div>
+
+          <!-- 即時等待中房間列表 -->
+          <div class="room-list-box">
+            <div class="room-list-label">正在等待挑戰者的房間（點擊直接加入）：</div>
+            <div id="room-list" class="room-list">
+              <div class="empty-rooms">目前沒有等待中的房間，快按上方建立一間吧！</div>
+            </div>
           </div>
         </div>
 
+        <!-- 已進入房間資訊列 -->
         <div id="room-info" class="room-info hidden">
           <div class="room-badges">
             <span class="badge room-badge">房號：<strong id="display-room-id">----</strong></span>
@@ -38,7 +73,7 @@
           </div>
           <div class="room-actions">
             <button id="copy-link-btn" class="mini-btn copy">🔗 複製邀請連結</button>
-            <button id="leave-room-btn" class="mini-btn leave">離開房間</button>
+            <button id="leave-room-btn" class="mini-btn leave">🚪 離開房間</button>
           </div>
         </div>
       </section>
@@ -58,13 +93,13 @@
       </div>
       <div class="score-card player2" id="card-p2">
         <span class="avatar" id="avatar-p2">🐶</span>
-        <span class="name" id="name-p2">小電腦</span>
+        <span class="name" id="name-p2">等待加入...</span>
         <span class="score" id="score-p2">0</span>
       </div>
     </section>
 
     <!-- 狀態提示泡泡 -->
-    <div class="status-bubble" id="status-text">輪到 🐱 囉！選一格吧！</div>
+    <div class="status-bubble waiting" id="status-text">🌐 請在上方「建立新房間」或點選列表加入對戰！</div>
 
     <!-- 3x3 遊戲棋盤 -->
     <section class="board" id="board">

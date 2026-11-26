@@ -1,10 +1,12 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getFirestore,
+  collection,
   doc,
   setDoc,
   getDoc,
   updateDoc,
+  deleteDoc,
   onSnapshot,
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -30,17 +32,24 @@ const THEMES = [
   { name: "恐龍時代", p1: "🦖", p2: "🦕" }
 ];
 
+// 可愛隨機暱稱庫
+const CUTE_NAMES = [
+  "快樂小貓", "無敵暴龍", "草莓布丁", "閃電小狗", "甜甜圈超人",
+  "星星兔兔", "棉花糖熊", "火箭企鵝", "彩虹獨角獸", "巧克力餅乾"
+];
+
 const WIN_PATTERNS = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
   [0, 3, 6], [1, 4, 7], [2, 5, 8],
   [0, 4, 8], [2, 4, 6]
 ];
 
-// 遊戲狀態
-let gameMode = "ai"; // "ai" | "local" | "online"
+// 遊戲基本狀態
+let myNickname = "";
+let gameMode = "online"; // "online" | "ai" | "local"
 let board = Array(9).fill("");
 let currentPlayer = "p1";
-let isGameActive = true;
+let isGameActive = false;
 let themeIndex = 0;
 let soundEnabled = true;
 let aiTimer = null;
@@ -49,22 +58,35 @@ let scores = { p1: 0, p2: 0, draw: 0 };
 // 線上對戰專用狀態
 let roomId = null;
 let myRole = null; // "p1" | "p2"
+let hostName = "房主";
+let guestName = "";
 let p2Joined = false;
 let unsubscribeRoom = null;
+let unsubscribeLobby = null;
 let currentRoundId = 1;
 let lastRenderedBoard = Array(9).fill("");
+let pendingAutoRoom = null;
 
 // DOM 元素
+const nicknameModal = document.getElementById("nickname-modal");
+const nicknameInput = document.getElementById("nickname-input");
+const randomNameBtn = document.getElementById("random-name-btn");
+const startGameBtn = document.getElementById("start-game-btn");
+const myProfileBadge = document.getElementById("my-profile-badge");
+
+const opponentLeftModal = document.getElementById("opponent-left-modal");
+const opponentLeftMsg = document.getElementById("opponent-left-msg");
+const backToLobbyBtn = document.getElementById("back-to-lobby-btn");
+
 const cells = document.querySelectorAll(".cell");
 const statusText = document.getElementById("status-text");
 const modeBtn = document.getElementById("mode-btn");
 const onlineToggleBtn = document.getElementById("online-toggle-btn");
 const onlinePanel = document.getElementById("online-panel");
 const lobbyControls = document.getElementById("lobby-controls");
+const roomListEl = document.getElementById("room-list");
 const roomInfo = document.getElementById("room-info");
 const createRoomBtn = document.getElementById("create-room-btn");
-const joinRoomBtn = document.getElementById("join-room-btn");
-const roomInput = document.getElementById("room-input");
 const displayRoomId = document.getElementById("display-room-id");
 const myRoleBadge = document.getElementById("my-role-badge");
 const copyLinkBtn = document.getElementById("copy-link-btn");
@@ -129,14 +151,14 @@ function playSound(type) {
       o.start(now + i * 0.1);
       o.stop(now + i * 0.1 + 0.25);
     });
-  } else if (type === "draw") {
+  } else if (type === "draw" || type === "leave") {
     osc.type = "sine";
-    osc.frequency.setValueAtTime(350, now);
-    osc.frequency.linearRampToValueAtTime(260, now + 0.25);
-    gain.gain.setValueAtTime(0.2, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+    osc.frequency.setValueAtTime(360, now);
+    osc.frequency.linearRampToValueAtTime(220, now + 0.3);
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
     osc.start(now);
-    osc.stop(now + 0.25);
+    osc.stop(now + 0.3);
   }
 }
 
@@ -144,7 +166,59 @@ function getIcon(player) {
   return THEMES[themeIndex][player];
 }
 
-// 更新整體畫面
+// --- 暱稱設定邏輯 ---
+
+function setNickname(name) {
+  myNickname = name.trim();
+  sessionStorage.setItem("ttt_nickname", myNickname);
+  myProfileBadge.textContent = `👤 ${myNickname} ✏️`;
+  nicknameModal.classList.add("hidden");
+
+  // 若已經在線上房間內修改暱稱，同步更新到 Firestore
+  if (gameMode === "online" && roomId && myRole) {
+    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+    const field = myRole === "p1" ? { hostName: myNickname } : { guestName: myNickname };
+    updateDoc(roomRef, field).catch(() => {});
+  } else {
+    updateUI();
+  }
+
+  // 若網址帶有邀請房號，輸入暱稱後自動加入
+  if (pendingAutoRoom) {
+    const target = pendingAutoRoom;
+    pendingAutoRoom = null;
+    joinOnlineRoom(target);
+  }
+}
+
+randomNameBtn.addEventListener("click", () => {
+  const randomPick = CUTE_NAMES[Math.floor(Math.random() * CUTE_NAMES.length)];
+  const suffix = Math.floor(10 + Math.random() * 89);
+  nicknameInput.value = `${randomPick}${suffix}`;
+});
+
+startGameBtn.addEventListener("click", () => {
+  const val = nicknameInput.value.trim();
+  if (!val) {
+    nicknameInput.focus();
+    alert("請先輸入暱稱，或按「🎲 隨機取名」喔！");
+    return;
+  }
+  setNickname(val);
+});
+
+nicknameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") startGameBtn.click();
+});
+
+myProfileBadge.addEventListener("click", () => {
+  nicknameInput.value = myNickname;
+  nicknameModal.classList.remove("hidden");
+  nicknameInput.focus();
+});
+
+// --- 畫面更新 ---
+
 function updateUI() {
   const theme = THEMES[themeIndex];
   avatarP1.textContent = theme.p1;
@@ -152,15 +226,18 @@ function updateUI() {
   themeBtn.textContent = `🎨 ${theme.name}`;
 
   if (gameMode === "online") {
-    nameP1.textContent = myRole === "p1" ? "你 (房主)" : "房主";
-    nameP2.textContent = myRole === "p2" ? "你 (挑戰者)" : (p2Joined ? "挑戰者" : "等待加入...");
-    if (myRole) {
+    if (roomId) {
+      nameP1.textContent = hostName || "房主";
+      nameP2.textContent = p2Joined ? (guestName || "挑戰者") : "等待加入...";
       myRoleBadge.textContent = myRole === "p1"
         ? `你是 ${theme.p1} 房主`
         : `你是 ${theme.p2} 挑戰者`;
+    } else {
+      nameP1.textContent = myNickname || "玩家 1";
+      nameP2.textContent = "等待對手";
     }
   } else {
-    nameP1.textContent = "玩家 1";
+    nameP1.textContent = myNickname || "玩家 1";
     nameP2.textContent = gameMode === "ai" ? "小電腦" : "玩家 2";
   }
 
@@ -180,14 +257,76 @@ function updateUI() {
   cardP2.classList.toggle("active", canHighlightTurn && currentPlayer === "p2");
 }
 
-// 檢查連線
 function checkWinner(targetBoard, player) {
   return WIN_PATTERNS.find(combo =>
     combo.every(index => targetBoard[index] === player)
   ) || null;
 }
 
-// --- 線上 Firestore 房間邏輯 ---
+// --- 即時房間列表監聽 ---
+
+function startLobbyListener() {
+  if (unsubscribeLobby) return;
+
+  const roomsRef = collection(db, ROOMS_COLLECTION);
+  unsubscribeLobby = onSnapshot(roomsRef, (snapshot) => {
+    const waitingRooms = [];
+    const nowMs = Date.now();
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      // 過濾出狀態為 waiting 且尚未有第二位玩家加入的房間
+      if (data.status === "waiting" && !data.p2Joined) {
+        // 排除超過 3 小時的殘留舊房間
+        const updatedMs = data.updatedAt?.toMillis ? data.updatedAt.toMillis() : nowMs;
+        if (nowMs - updatedMs < 3 * 60 * 60 * 1000) {
+          waitingRooms.push({ id: docSnap.id, ...data });
+        }
+      }
+    });
+
+    renderRoomList(waitingRooms);
+  });
+}
+
+function renderRoomList(rooms) {
+  roomListEl.innerHTML = "";
+
+  if (rooms.length === 0) {
+    roomListEl.innerHTML = `<div class="empty-rooms">目前沒有等待中的房間，快按上方「➕ 建立新房間」吧！</div>`;
+    return;
+  }
+
+  rooms.forEach((room) => {
+    const theme = THEMES[room.themeIndex ?? 0];
+    const item = document.createElement("div");
+    item.className = "room-item";
+    item.innerHTML = `
+      <div class="room-item-info">
+        <span class="room-item-icon">${theme.p1}</span>
+        <div>
+          <div class="room-item-host">${escapeHtml(room.hostName || "神秘玩家")} 的房間</div>
+          <div class="room-item-code">房號 #${room.id}・${theme.name}</div>
+        </div>
+      </div>
+      <button class="join-direct-btn">⚔️ 加入對戰</button>
+    `;
+
+    item.querySelector(".join-direct-btn").addEventListener("click", () => {
+      joinOnlineRoom(room.id);
+    });
+
+    roomListEl.appendChild(item);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// --- 建立 / 加入 / 離開線上房間 ---
 
 function generateRoomCode() {
   return String(Math.floor(1000 + Math.random() * 9000));
@@ -202,13 +341,16 @@ async function createOnlineRoom() {
     let roomRef = doc(db, ROOMS_COLLECTION, newCode);
     let snap = await getDoc(roomRef);
 
-    // 若房號剛好存在則重抽一次
-    if (snap.exists()) {
+    if (snap.exists() && snap.data().status !== "abandoned") {
       newCode = generateRoomCode();
       roomRef = doc(db, ROOMS_COLLECTION, newCode);
     }
 
     const initialData = {
+      hostName: myNickname,
+      guestName: "",
+      status: "waiting", // "waiting" | "playing" | "abandoned"
+      leftBy: "",
       board: Array(9).fill(""),
       currentPlayer: "p1",
       themeIndex,
@@ -222,34 +364,32 @@ async function createOnlineRoom() {
     enterRoom(newCode, "p1");
   } catch (err) {
     console.error("建立房間失敗：", err);
-    alert("建立房間失敗，請確認 Firestore 權限規則是否已開啟讀寫！");
+    alert("建立房間失敗，請確認網路或 Firestore 權限設定！");
   } finally {
     createRoomBtn.disabled = false;
-    createRoomBtn.textContent = "🏠 建立房間";
+    createRoomBtn.textContent = "➕ 建立新房間";
   }
 }
 
 async function joinOnlineRoom(targetCode) {
-  const cleanCode = targetCode.trim();
-  if (!/^\d{4}$/.test(cleanCode)) {
-    alert("請輸入 4 位數字房號喔！");
-    return;
-  }
-
-  joinRoomBtn.disabled = true;
-  joinRoomBtn.textContent = "加入中...";
+  const cleanCode = String(targetCode).trim();
+  if (!/^\d{4}$/.test(cleanCode)) return;
 
   try {
     const roomRef = doc(db, ROOMS_COLLECTION, cleanCode);
     const snap = await getDoc(roomRef);
 
     if (!snap.exists()) {
-      alert(`找不到 ${cleanCode} 號房間，請確認房號是否正確！`);
+      alert(`找不到 ${cleanCode} 號房間，可能已經結束囉！`);
       return;
     }
 
     const data = snap.data();
-    // 判斷是否為自己原本開的房（透過 sessionStorage 記憶）
+    if (data.status === "abandoned") {
+      alert("這間房間的對戰已經結束囉，請選擇其他房間或建立新房間！");
+      return;
+    }
+
     const savedRole = sessionStorage.getItem(`ttt_role_${cleanCode}`);
     let assignedRole = "p2";
 
@@ -258,23 +398,22 @@ async function joinOnlineRoom(targetCode) {
     } else if (!data.p2Joined) {
       await updateDoc(roomRef, {
         p2Joined: true,
+        guestName: myNickname,
+        status: "playing",
         updatedAt: serverTimestamp()
       });
       assignedRole = "p2";
     } else if (savedRole === "p2") {
       assignedRole = "p2";
     } else {
-      alert("這間房間已經有兩位小朋友在對戰囉！請換一間或自己建立新房間。");
+      alert("這間房間已經有兩位選手在對戰囉！請選擇其他房間。");
       return;
     }
 
     enterRoom(cleanCode, assignedRole);
   } catch (err) {
     console.error("加入房間失敗：", err);
-    alert("加入房間失敗，請檢查網路或 Firestore 設定！");
-  } finally {
-    joinRoomBtn.disabled = false;
-    joinRoomBtn.textContent = "加入";
+    alert("加入房間失敗，請稍後再試！");
   }
 }
 
@@ -286,30 +425,39 @@ function enterRoom(code, role) {
   myRole = role;
   sessionStorage.setItem(`ttt_role_${code}`, role);
 
-  // 更新網址參數方便分享
   const url = new URL(window.location.href);
   url.searchParams.set("room", code);
   window.history.replaceState({}, "", url);
 
   onlinePanel.classList.remove("hidden");
   onlineToggleBtn.classList.add("active-mode");
+  modeBtn.classList.remove("active-mode");
   lobbyControls.classList.add("hidden");
   roomInfo.classList.remove("hidden");
   displayRoomId.textContent = code;
 
   const roomRef = doc(db, ROOMS_COLLECTION, code);
   unsubscribeRoom = onSnapshot(roomRef, (snapshot) => {
-    if (!snapshot.exists()) return;
+    if (!snapshot.exists()) {
+      handleOpponentAbandoned("房主");
+      return;
+    }
     syncFromFirestore(snapshot.data());
   });
 }
 
 function syncFromFirestore(data) {
+  // 檢查是否有一方已離開房間
+  if (data.status === "abandoned") {
+    const leaver = data.leftBy || (myRole === "p1" ? (guestName || "挑戰者") : (hostName || "房主"));
+    handleOpponentAbandoned(leaver);
+    return;
+  }
+
   const newBoard = data.board || Array(9).fill("");
   const newRoundId = data.roundId || 1;
   const isNewRound = newRoundId !== currentRoundId;
 
-  // 偵測新落子以播放音效與彈出動畫
   let movedIdx = -1;
   if (!isNewRound) {
     for (let i = 0; i < 9; i++) {
@@ -325,10 +473,11 @@ function syncFromFirestore(data) {
   currentPlayer = data.currentPlayer || "p1";
   themeIndex = data.themeIndex ?? 0;
   scores = data.scores || { p1: 0, p2: 0, draw: 0 };
+  hostName = data.hostName || "房主";
+  guestName = data.guestName || "";
   p2Joined = Boolean(data.p2Joined);
   currentRoundId = newRoundId;
 
-  // 清除舊特效
   statusText.classList.remove("win", "waiting");
   cells.forEach(c => c.classList.remove("win-cell"));
 
@@ -343,7 +492,6 @@ function syncFromFirestore(data) {
     playSound(movedPlayer === "p1" ? "pop1" : "pop2");
   }
 
-  // 判斷勝負狀態
   const winP1 = checkWinner(board, "p1");
   const winP2 = checkWinner(board, "p2");
   const winCombo = winP1 || winP2;
@@ -352,10 +500,11 @@ function syncFromFirestore(data) {
   if (winner) {
     isGameActive = false;
     winCombo.forEach(idx => cells[idx].classList.add("win-cell"));
+    const winnerName = winner === "p1" ? hostName : guestName;
     const isMe = winner === myRole;
     statusText.textContent = isMe
-      ? `🎉 太棒了！你 (${getIcon(winner)}) 贏了！`
-      : `👏 ${getIcon(winner)} 對手贏了！再挑戰一局吧！`;
+      ? `🎉 太棒了！${winnerName} (${getIcon(winner)}) 獲勝！`
+      : `👏 ${winnerName} (${getIcon(winner)}) 獲勝！再挑戰一局吧！`;
     statusText.classList.add("win");
     if (movedIdx !== -1) {
       playSound("win");
@@ -369,28 +518,82 @@ function syncFromFirestore(data) {
     isGameActive = true;
     stopConfetti();
 
+    const p1Display = `${hostName} ${getIcon("p1")}`;
+    const p2Display = `${guestName || "挑戰者"} ${getIcon("p2")}`;
+
     if (!p2Joined) {
-      statusText.textContent = `⏳ 等待對手加入房間（房號 ${roomId}）...`;
+      statusText.textContent = `⏳ 等待挑戰者加入大廳列表（房號 #${roomId}）...`;
       statusText.classList.add("waiting");
     } else if (currentPlayer === myRole) {
-      statusText.textContent = `✨ 輪到你 (${getIcon(myRole)}) 囉！快選一格！`;
+      statusText.textContent = `✨ 輪到你 (${myNickname} ${getIcon(myRole)}) 囉！快選一格！`;
     } else {
-      statusText.textContent = `👀 換對手 (${getIcon(currentPlayer)}) 思考中...`;
+      const opponentDisplay = currentPlayer === "p1" ? p1Display : p2Display;
+      statusText.textContent = `👀 換對手 (${opponentDisplay}) 思考中...`;
     }
   }
 
   updateUI();
 }
 
-async function leaveOnlineRoom() {
+// 收到對手離開通知並結束比賽
+function handleOpponentAbandoned(leaverName) {
   if (unsubscribeRoom) {
     unsubscribeRoom();
     unsubscribeRoom = null;
   }
+  isGameActive = false;
+  stopConfetti();
+  playSound("leave");
+
+  statusText.classList.remove("win", "waiting");
+  statusText.textContent = `😢 對手「${leaverName}」已離開房間，比賽結束！`;
+  updateUI();
+
+  opponentLeftMsg.textContent = `對手「${leaverName}」已經離開房間，本場比賽提前結束！`;
+  opponentLeftModal.classList.remove("hidden");
+}
+
+// 主動離開房間（通知對手並結束比賽）
+async function leaveOnlineRoom(notifyOpponent = true) {
+  const leavingRoomId = roomId;
+  if (unsubscribeRoom) {
+    unsubscribeRoom();
+    unsubscribeRoom = null;
+  }
+
+  if (leavingRoomId) {
+    sessionStorage.removeItem(`ttt_role_${leavingRoomId}`);
+    const roomRef = doc(db, ROOMS_COLLECTION, leavingRoomId);
+    try {
+      if (notifyOpponent && p2Joined) {
+        // 若已有對手在內，標記為 abandoned 讓對手即時收到通知
+        await updateDoc(roomRef, {
+          status: "abandoned",
+          leftBy: myNickname,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        // 若尚未有對手加入，直接刪除等待中的房間
+        await deleteDoc(roomRef);
+      }
+    } catch (err) {
+      console.error("更新離開狀態失敗：", err);
+    }
+  }
+
+  resetOnlineRoomState();
+}
+
+function resetOnlineRoomState() {
   roomId = null;
   myRole = null;
   p2Joined = false;
+  hostName = "房主";
+  guestName = "";
+  board = Array(9).fill("");
   lastRenderedBoard = Array(9).fill("");
+  isGameActive = false;
+  scores = { p1: 0, p2: 0, draw: 0 };
 
   const url = new URL(window.location.href);
   url.searchParams.delete("room");
@@ -398,8 +601,36 @@ async function leaveOnlineRoom() {
 
   roomInfo.classList.add("hidden");
   lobbyControls.classList.remove("hidden");
-  switchToOfflineMode("ai");
+  statusText.classList.remove("win");
+  statusText.classList.add("waiting");
+  statusText.textContent = "🌐 請在上方「建立新房間」或點選列表加入對戰！";
+  cells.forEach(c => {
+    c.textContent = "";
+    c.classList.remove("pop", "win-cell");
+  });
+  updateUI();
 }
+
+// 關閉分頁或重新整理時也通知對手離開
+window.addEventListener("pagehide", () => {
+  if (gameMode === "online" && roomId) {
+    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+    if (p2Joined) {
+      updateDoc(roomRef, {
+        status: "abandoned",
+        leftBy: myNickname,
+        updatedAt: serverTimestamp()
+      }).catch(() => {});
+    } else {
+      deleteDoc(roomRef).catch(() => {});
+    }
+  }
+});
+
+backToLobbyBtn.addEventListener("click", () => {
+  opponentLeftModal.classList.add("hidden");
+  resetOnlineRoomState();
+});
 
 // --- 玩家點擊與下棋邏輯 ---
 
@@ -432,7 +663,6 @@ async function makeOnlineMove(idx) {
 
   const nextPlayer = myRole === "p1" ? "p2" : "p1";
 
-  // 先在本地更新避免連點
   isGameActive = false;
   updateUI();
 
@@ -471,7 +701,8 @@ function makeLocalMove(idx, player) {
     statusText.textContent = `${getIcon("p2")} 小電腦正在想辦法...`;
     aiTimer = setTimeout(aiMove, 550);
   } else {
-    statusText.textContent = `輪到 ${getIcon(currentPlayer)} 囉！選一格吧！`;
+    const turnName = currentPlayer === "p1" ? myNickname : "玩家 2";
+    statusText.textContent = `輪到 ${turnName} (${getIcon(currentPlayer)}) 囉！`;
   }
 }
 
@@ -509,7 +740,6 @@ function findBestMove(player) {
 
 function endLocalGame(result, winCombo) {
   isGameActive = false;
-  updateUI();
 
   if (result === "draw") {
     scores.draw++;
@@ -518,8 +748,8 @@ function endLocalGame(result, winCombo) {
   } else {
     scores[result]++;
     winCombo.forEach(idx => cells[idx].classList.add("win-cell"));
-    const winnerName = result === "p1" ? "玩家 1" : (gameMode === "ai" ? "小電腦" : "玩家 2");
-    statusText.textContent = `🎉 太棒了！${getIcon(result)} ${winnerName} 贏了！`;
+    const winnerName = result === "p1" ? myNickname : (gameMode === "ai" ? "小電腦" : "玩家 2");
+    statusText.textContent = `🎉 太棒了！${winnerName} (${getIcon(result)}) 贏了！`;
     statusText.classList.add("win");
     playSound("win");
     launchConfetti();
@@ -533,7 +763,7 @@ function restartLocalGame() {
   currentPlayer = "p1";
   isGameActive = true;
   statusText.classList.remove("win", "waiting");
-  statusText.textContent = `輪到 ${getIcon("p1")} 囉！選一格吧！`;
+  statusText.textContent = `輪到 ${myNickname} (${getIcon("p1")}) 囉！選一格吧！`;
 
   cells.forEach(cell => {
     cell.textContent = "";
@@ -544,18 +774,15 @@ function restartLocalGame() {
   updateUI();
 }
 
-function switchToOfflineMode(targetMode) {
-  if (unsubscribeRoom) {
-    unsubscribeRoom();
-    unsubscribeRoom = null;
+async function switchToOfflineMode(targetMode) {
+  if (gameMode === "online" && roomId) {
+    await leaveOnlineRoom(true);
   }
-  roomId = null;
-  myRole = null;
-  p2Joined = false;
 
   gameMode = targetMode;
   onlinePanel.classList.add("hidden");
   onlineToggleBtn.classList.remove("active-mode");
+  modeBtn.classList.add("active-mode");
   modeBtn.textContent = gameMode === "ai" ? "🤖 挑戰小電腦" : "👫 同機雙人";
 
   scores = { p1: 0, p2: 0, draw: 0 };
@@ -565,34 +792,26 @@ function switchToOfflineMode(targetMode) {
 // --- 按鈕事件監聽 ---
 
 modeBtn.addEventListener("click", () => {
-  const nextMode = gameMode === "ai" ? "local" : "ai";
-  switchToOfflineMode(nextMode);
+  if (gameMode === "online") {
+    switchToOfflineMode("ai");
+  } else {
+    const nextMode = gameMode === "ai" ? "local" : "ai";
+    switchToOfflineMode(nextMode);
+  }
 });
 
 onlineToggleBtn.addEventListener("click", () => {
-  if (gameMode === "online" && !roomId) {
-    switchToOfflineMode("ai");
-    return;
-  }
+  if (gameMode === "online") return;
   clearTimeout(aiTimer);
   gameMode = "online";
   onlinePanel.classList.remove("hidden");
   onlineToggleBtn.classList.add("active-mode");
-  statusText.classList.remove("win");
-  statusText.classList.add("waiting");
-  statusText.textContent = "🌐 請建立新房間，或輸入 4 碼房號加入！";
-  board = Array(9).fill("");
-  isGameActive = false;
-  stopConfetti();
-  updateUI();
+  modeBtn.classList.remove("active-mode");
+  resetOnlineRoomState();
 });
 
 createRoomBtn.addEventListener("click", createOnlineRoom);
-joinRoomBtn.addEventListener("click", () => joinOnlineRoom(roomInput.value));
-roomInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") joinOnlineRoom(roomInput.value);
-});
-leaveRoomBtn.addEventListener("click", leaveOnlineRoom);
+leaveRoomBtn.addEventListener("click", () => leaveOnlineRoom(true));
 
 copyLinkBtn.addEventListener("click", async () => {
   if (!roomId) return;
@@ -628,7 +847,6 @@ soundBtn.addEventListener("click", () => {
 
 restartBtn.addEventListener("click", async () => {
   if (gameMode === "online" && roomId) {
-    // 下一局輪流先攻，更公平！
     const nextStarter = (currentRoundId % 2 === 1) ? "p2" : "p1";
     const roomRef = doc(db, ROOMS_COLLECTION, roomId);
     await updateDoc(roomRef, {
@@ -637,7 +855,7 @@ restartBtn.addEventListener("click", async () => {
       roundId: currentRoundId + 1,
       updatedAt: serverTimestamp()
     });
-  } else {
+  } else if (gameMode !== "online") {
     restartLocalGame();
   }
 });
@@ -652,7 +870,7 @@ resetScoreBtn.addEventListener("click", async () => {
       roundId: currentRoundId + 1,
       updatedAt: serverTimestamp()
     });
-  } else {
+  } else if (gameMode !== "online") {
     scores = { p1: 0, p2: 0, draw: 0 };
     restartLocalGame();
   }
@@ -715,14 +933,19 @@ function stopConfetti() {
   particles = [];
 }
 
-// --- 啟動時檢查網址是否帶有 ?room=XXXX ---
+// --- 初始化啟動流程 ---
+startLobbyListener();
+
 const urlParams = new URLSearchParams(window.location.search);
 const autoRoomCode = urlParams.get("room");
 if (autoRoomCode && /^\d{4}$/.test(autoRoomCode)) {
-  gameMode = "online";
-  onlinePanel.classList.remove("hidden");
-  onlineToggleBtn.classList.add("active-mode");
-  joinOnlineRoom(autoRoomCode);
+  pendingAutoRoom = autoRoomCode;
+}
+
+const savedNickname = sessionStorage.getItem("ttt_nickname");
+if (savedNickname) {
+  setNickname(savedNickname);
 } else {
   updateUI();
+  setTimeout(() => nicknameInput.focus(), 150);
 }
