@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歡樂井字大作戰 - 線上雙人版</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="confetti-canvas"></canvas>
+
+  <main class="game-container">
+    <header>
+      <h1>✨ 歡樂井字大作戰 ✨</h1>
+
+      <!-- 模式與設定列 -->
+      <div class="controls-bar">
+        <button id="mode-btn" class="pill-btn mode-ai">🤖 挑戰小電腦</button>
+        <button id="online-toggle-btn" class="pill-btn mode-online">🌐 線上雙人對戰</button>
+        <button id="theme-btn" class="pill-btn theme-btn">🎨 貓狗大戰</button>
+        <button id="sound-btn" class="pill-btn sound-btn" aria-label="音效開關">🔊</button>
+      </div>
+
+      <!-- 線上對戰大廳面板 -->
+      <section id="online-panel" class="online-panel hidden">
+        <div id="lobby-controls" class="lobby-controls">
+          <button id="create-room-btn" class="room-btn create">🏠 建立房間</button>
+          <div class="join-group">
+            <input type="text" id="room-input" maxlength="4" inputmode="numeric" placeholder="輸入4碼房號">
+            <button id="join-room-btn" class="room-btn join">加入</button>
+          </div>
+        </div>
+
+        <div id="room-info" class="room-info hidden">
+          <div class="room-badges">
+            <span class="badge room-badge">房號：<strong id="display-room-id">----</strong></span>
+            <span class="badge role-badge" id="my-role-badge">你是 🐱 房主</span>
+          </div>
+          <div class="room-actions">
+            <button id="copy-link-btn" class="mini-btn copy">🔗 複製邀請連結</button>
+            <button id="leave-room-btn" class="mini-btn leave">離開房間</button>
+          </div>
+        </div>
+      </section>
+    </header>
+
+    <!-- 計分板 -->
+    <section class="scoreboard">
+      <div class="score-card player1 active" id="card-p1">
+        <span class="avatar" id="avatar-p1">🐱</span>
+        <span class="name" id="name-p1">玩家 1</span>
+        <span class="score" id="score-p1">0</span>
+      </div>
+      <div class="score-card draw">
+        <span class="avatar">🤝</span>
+        <span class="name">平手</span>
+        <span class="score" id="score-draw">0</span>
+      </div>
+      <div class="score-card player2" id="card-p2">
+        <span class="avatar" id="avatar-p2">🐶</span>
+        <span class="name" id="name-p2">小電腦</span>
+        <span class="score" id="score-p2">0</span>
+      </div>
+    </section>
+
+    <!-- 狀態提示泡泡 -->
+    <div class="status-bubble" id="status-text">輪到 🐱 囉！選一格吧！</div>
+
+    <!-- 3x3 遊戲棋盤 -->
+    <section class="board" id="board">
+      <button class="cell" data-index="0"></button>
+      <button class="cell" data-index="1"></button>
+      <button class="cell" data-index="2"></button>
+      <button class="cell" data-index="3"></button>
+      <button class="cell" data-index="4"></button>
+      <button class="cell" data-index="5"></button>
+      <button class="cell" data-index="6"></button>
+      <button class="cell" data-index="7"></button>
+      <button class="cell" data-index="8"></button>
+    </section>
+
+    <!-- 底部按鈕 -->
+    <footer>
+      <button id="restart-btn" class="action-btn">🔄 再玩一局</button>
+      <button id="reset-score-btn" class="secondary-btn">歸零分數</button>
+    </footer>
+  </main>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
